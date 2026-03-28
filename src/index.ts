@@ -64,6 +64,29 @@ import { logger } from './logger.js';
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
 
+const MODEL_PREFIX_RE = /^\[opus\]\s*/i;
+
+function parseModelPrefix(prompt: string): { prompt: string; modelOverride?: string } {
+  // Check if the last message line contains the [opus] prefix
+  // Messages are formatted as "Sender (time): content" lines
+  const lines = prompt.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    // Find the message content after "Sender (time): "
+    const colonIdx = line.indexOf('): ');
+    if (colonIdx !== -1) {
+      const content = line.slice(colonIdx + 3);
+      if (MODEL_PREFIX_RE.test(content)) {
+        lines[i] = line.slice(0, colonIdx + 3) + content.replace(MODEL_PREFIX_RE, '');
+        return { prompt: lines.join('\n'), modelOverride: 'claude-opus-4-6' };
+      }
+    }
+    break;
+  }
+  return { prompt };
+}
+
 let lastTimestamp = '';
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
@@ -180,7 +203,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
-  const prompt = formatMessages(missedMessages, TIMEZONE);
+  const rawPrompt = formatMessages(missedMessages, TIMEZONE);
+  const { prompt, modelOverride } = parseModelPrefix(rawPrompt);
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -212,7 +236,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
+  const output = await runAgent(group, prompt, chatJid, modelOverride, async (result) => {
     // Streaming output callback — called for each agent result
     if (result.result) {
       const raw =
@@ -269,6 +293,7 @@ async function runAgent(
   group: RegisteredGroup,
   prompt: string,
   chatJid: string,
+  modelOverride?: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
@@ -320,6 +345,7 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        modelOverride,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -418,7 +444,8 @@ async function startMessageLoop(): Promise<void> {
           );
           const messagesToSend =
             allPending.length > 0 ? allPending : groupMessages;
-          const formatted = formatMessages(messagesToSend, TIMEZONE);
+          const rawFormatted = formatMessages(messagesToSend, TIMEZONE);
+          const { prompt: formatted } = parseModelPrefix(rawFormatted);
 
           if (queue.sendMessage(chatJid, formatted)) {
             logger.debug(
