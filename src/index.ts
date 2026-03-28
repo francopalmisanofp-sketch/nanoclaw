@@ -66,25 +66,14 @@ export { escapeXml, formatMessages } from './router.js';
 
 const MODEL_PREFIX_RE = /^\[opus\]\s*/i;
 
-function parseModelPrefix(prompt: string): { prompt: string; modelOverride?: string } {
-  // Check if the last message line contains the [opus] prefix
-  // Messages are formatted as "Sender (time): content" lines
-  const lines = prompt.split('\n');
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    // Find the message content after "Sender (time): "
-    const colonIdx = line.indexOf('): ');
-    if (colonIdx !== -1) {
-      const content = line.slice(colonIdx + 3);
-      if (MODEL_PREFIX_RE.test(content)) {
-        lines[i] = line.slice(0, colonIdx + 3) + content.replace(MODEL_PREFIX_RE, '');
-        return { prompt: lines.join('\n'), modelOverride: 'claude-opus-4-6' };
-      }
-    }
-    break;
+function extractModelOverride(messages: NewMessage[]): string | undefined {
+  if (messages.length === 0) return undefined;
+  const last = messages[messages.length - 1];
+  if (MODEL_PREFIX_RE.test(last.content.trim())) {
+    last.content = last.content.trim().replace(MODEL_PREFIX_RE, '');
+    return 'claude-opus-4-6';
   }
-  return { prompt };
+  return undefined;
 }
 
 let lastTimestamp = '';
@@ -203,8 +192,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
-  const rawPrompt = formatMessages(missedMessages, TIMEZONE);
-  const { prompt, modelOverride } = parseModelPrefix(rawPrompt);
+  const modelOverride = extractModelOverride(missedMessages);
+  const prompt = formatMessages(missedMessages, TIMEZONE);
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -236,32 +225,38 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, modelOverride, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+  const output = await runAgent(
+    group,
+    prompt,
+    chatJid,
+    modelOverride,
+    async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
+        if (text) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
-    }
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
+      }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+  );
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -444,8 +439,8 @@ async function startMessageLoop(): Promise<void> {
           );
           const messagesToSend =
             allPending.length > 0 ? allPending : groupMessages;
-          const rawFormatted = formatMessages(messagesToSend, TIMEZONE);
-          const { prompt: formatted } = parseModelPrefix(rawFormatted);
+          extractModelOverride(messagesToSend);
+          const formatted = formatMessages(messagesToSend, TIMEZONE);
 
           if (queue.sendMessage(chatJid, formatted)) {
             logger.debug(
