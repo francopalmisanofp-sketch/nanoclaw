@@ -1,5 +1,4 @@
 /**
-import { execSync } from "child_process";
  * NanoClaw Agent Runner
  * Runs inside a container, receives config via stdin, outputs result to stdout
  *
@@ -19,6 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
+import { execSync } from "child_process";
 
 interface ContainerInput {
   prompt: string;
