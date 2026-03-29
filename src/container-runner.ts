@@ -242,6 +242,8 @@ function buildContainerArgs(
 
   // Per-message model override (e.g. [opus] prefix)
   if (modelOverride) {
+    args.push('-e', `ANTHROPIC_MODEL=${modelOverride}`);
+    args.push('-e', `ANTHROPIC_DEFAULT_MODEL=${modelOverride}`);
     args.push('-e', `CLAUDE_MODEL=${modelOverride}`);
   }
 
@@ -285,7 +287,11 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName, input.modelOverride);
+  const containerArgs = buildContainerArgs(
+    mounts,
+    containerName,
+    input.modelOverride,
+  );
 
   logger.debug(
     {

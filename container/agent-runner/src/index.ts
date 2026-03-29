@@ -27,6 +27,7 @@ interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  modelOverride?: string;
 }
 
 interface ContainerOutput {
@@ -336,6 +337,7 @@ async function runQuery(
   containerInput: ContainerInput,
   sdkEnv: Record<string, string | undefined>,
   resumeAt?: string,
+  modelOverride?: string,
 ): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean }> {
   const stream = new MessageStream();
   stream.push(prompt);
@@ -392,9 +394,10 @@ async function runQuery(
   for await (const message of query({
     prompt: stream,
     options: {
+      model: modelOverride,
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
-      resume: sessionId,
+      resume: modelOverride ? undefined : sessionId,
       resumeSessionAt: resumeAt,
       systemPrompt: globalClaudeMd
         ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
@@ -510,8 +513,11 @@ async function main(): Promise<void> {
   try {
     while (true) {
       log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
+    log(`Model override: ${containerInput.modelOverride || "none"}`);
 
-      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
+      const effectiveModel = containerInput.modelOverride || process.env.CLAUDE_MODEL || undefined;
+      log(`Effective model: ${effectiveModel || "default"}`);
+      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt, effectiveModel);
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
       }
