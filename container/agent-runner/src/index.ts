@@ -1,4 +1,5 @@
 /**
+import { execSync } from "child_process";
  * NanoClaw Agent Runner
  * Runs inside a container, receives config via stdin, outputs result to stdout
  *
@@ -517,8 +518,44 @@ async function main(): Promise<void> {
 
       const effectiveModel = containerInput.modelOverride || process.env.CLAUDE_MODEL || undefined;
       log(`Effective model: ${effectiveModel || "default"}`);
-      if (effectiveModel) { process.env.ANTHROPIC_MODEL = effectiveModel; }
-      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt, effectiveModel);
+
+      let queryResult: { newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean };
+
+      if (containerInput.modelOverride) {
+        // CLI mode: use claude binary which respects --model with OAuth
+        log(`[CLI mode] Using claude CLI with model: ${containerInput.modelOverride}`);
+        try {
+          const cliResult = execSync(
+            `claude -p --model ${containerInput.modelOverride} --dangerously-skip-permissions`,
+            {
+              input: prompt,
+              cwd: '/workspace/group',
+              encoding: 'utf-8',
+              timeout: 600000,
+              maxBuffer: 10 * 1024 * 1024,
+              env: { ...process.env },
+            }
+          );
+          log(`[CLI mode] Got result: ${cliResult.length} chars`);
+          writeOutput({ status: 'success', result: cliResult, newSessionId: sessionId });
+          queryResult = { newSessionId: sessionId, lastAssistantUuid: undefined, closedDuringQuery: false };
+        } catch (cliErr: any) {
+          const errMsg = cliErr.stderr?.toString() || cliErr.message || 'Unknown CLI error';
+          log(`[CLI mode] Error: ${errMsg}`);
+          // If CLI produced output before failing, use it
+          if (cliErr.stdout?.toString().trim()) {
+            writeOutput({ status: 'success', result: cliErr.stdout.toString(), newSessionId: sessionId });
+            queryResult = { newSessionId: sessionId, lastAssistantUuid: undefined, closedDuringQuery: false };
+          } else {
+            writeOutput({ status: 'error', result: null, error: `CLI error: ${errMsg.slice(-500)}` });
+            queryResult = { newSessionId: sessionId, lastAssistantUuid: undefined, closedDuringQuery: false };
+          }
+        }
+      } else {
+        // SDK mode: normal query() call
+        if (effectiveModel) { process.env.ANTHROPIC_MODEL = effectiveModel; }
+        queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt, effectiveModel);
+      }
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
       }
