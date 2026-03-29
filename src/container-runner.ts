@@ -246,6 +246,11 @@ function buildContainerArgs(
     args.push('-e', `ANTHROPIC_DEFAULT_MODEL=${modelOverride}`);
     args.push('-e', `CLAUDE_MODEL=${modelOverride}`);
   }
+  // GitHub CLI authentication for PR automation
+  if (process.env.GH_TOKEN) {
+    args.push('-e', `GH_TOKEN=${process.env.GH_TOKEN}`);
+  }
+
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
