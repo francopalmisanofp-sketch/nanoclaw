@@ -517,6 +517,7 @@ async function main(): Promise<void> {
 
       const effectiveModel = containerInput.modelOverride || process.env.CLAUDE_MODEL || undefined;
       log(`Effective model: ${effectiveModel || "default"}`);
+      if (effectiveModel) { process.env.ANTHROPIC_MODEL = effectiveModel; }
       const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt, effectiveModel);
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
